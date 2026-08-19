@@ -1,0 +1,32 @@
+rules_version = '2';
+
+// Statiq Assessments — Firestore security rules
+//
+// Posture: locked by default. A signed-in candidate can only ever
+// read/write the submission document that matches their own authenticated
+// email. No candidate can read another candidate's data, list all
+// submissions, or write to any other collection. Admin operations (adding
+// candidates to Assessment_Access, reading roles/instructions) happen via
+// Notion, not Firestore — Firestore here is only used for live in-progress
+// state (autosave) and timestamps while a candidate is actively working.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // In-progress assessment state, keyed by candidate email.
+    // Doc ID = candidate's email address (lowercased).
+    match /inProgressAssessments/{candidateEmail} {
+
+      // A signed-in user may only read/write the doc matching their own
+      // authenticated email — never anyone else's.
+      allow read, write: if request.auth != null
+                          && request.auth.token.email.lower() == candidateEmail;
+    }
+
+    // Everything else is denied by default (locked mode's default,
+    // kept explicit here for clarity).
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
