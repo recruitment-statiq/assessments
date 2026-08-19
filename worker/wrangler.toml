@@ -5,9 +5,9 @@ compatibility_date = "2026-01-01"
 # Plain (non-secret) variables — the database IDs themselves aren't
 # sensitive, only the NOTION_TOKEN is.
 [vars]
-ASSESSMENT_ACCESS_DB_ID = "17457fe2-2eaa-4956-8ed3-abba9599b33f"
-ASSESSMENT_ROLES_DB_ID = "77fac5cf-49f0-4fbb-8d6b-a3e9698e2599"
-ASSESSMENT_SUBMISSIONS_DB_ID = "fae4708f-6447-4c5e-acb1-ba5ff4a0f73b"
+ASSESSMENT_ACCESS_DB_ID = "edc36c1e-2b61-403b-94d9-0cc10b5e6ded"
+ASSESSMENT_ROLES_DB_ID = "97058352-b62c-42a8-ae7a-7947cac6d5f9"
+ASSESSMENT_SUBMISSIONS_DB_ID = "05205842-f42e-48a4-b271-c79d73f56a94"
 
 # NOTION_TOKEN is set separately via:
 #   wrangler secret put NOTION_TOKEN
