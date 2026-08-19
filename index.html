@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Statiq Assessments</title>
+<style>
+  :root {
+    --bg: #f5f5f3;
+    --panel: #ffffff;
+    --border: #e2e2df;
+    --text: #1f1f1d;
+    --muted: #6b6b66;
+    --accent: #2f2f2c;
+    --accent-soft: #eeeeec;
+    --success: #3d7a4f;
+    --success-bg: #e7f2e9;
+    --warn: #a3631f;
+    --warn-bg: #faf0e2;
+    --danger: #a33d3d;
+    --danger-bg: #f7e9e9;
+    --admin: #4a3f6b;
+    --admin-bg: #efecf7;
+    --radius: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .stage { max-width: 480px; margin: 0 auto; padding: 40px 18px 60px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px 24px; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  h2 { font-size: 17px; margin: 0 0 4px; }
+  h3 { font-size: 14.5px; margin: 0 0 8px; }
+  p { line-height: 1.55; color: var(--text); margin: 0 0 12px; }
+  .muted { color: var(--muted); font-size: 13.5px; }
+  .brand-row { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+  .brand-mark { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
+  .brand-name { font-weight: 600; font-size: 14.5px; letter-spacing: 0.01em; }
+  .brand-name span { color: var(--muted); font-weight: 400; }
+  label { display: block; font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+  input[type=text], input[type=email], textarea {
+    width: 100%; padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14.5px; font-family: inherit; background: #fcfcfb; color: var(--text); margin-bottom: 14px;
+  }
+  textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); background: #fff; }
+  button {
+    font-family: inherit; font-size: 14px; font-weight: 600; border-radius: 8px;
+    padding: 12px 18px; border: none; cursor: pointer; transition: opacity .15s ease;
+  }
+  button:hover { opacity: 0.88; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; width: 100%; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 20px; letter-spacing: 0.02em; }
+  .task { border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 18px 6px; margin-bottom: 14px; background: #fdfdfc; }
+  .task.info-only { background: var(--accent-soft); border-style: dashed; }
+  .task-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
+  .task-number { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .task-type-tag { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+  .folder-box { background: var(--accent-soft); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-size: 13.5px; }
+  .folder-box a { color: var(--accent); font-weight: 600; }
+  .timestamp-strip { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); background: #fafaf8; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; }
+  .timestamp-strip b { color: var(--text); }
+  .error-box { background: var(--danger-bg); color: var(--danger); border-radius: 8px; padding: 12px 14px; font-size: 13.5px; margin-bottom: 14px; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; margin-right: 8px; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .center-msg { text-align: center; padding: 60px 20px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script type="module">
+import {
+  requestSignInLink,
+  completeSignInIfApplicable,
+  checkAssessmentAccess,
+  watchAuthState
+} from "./js/auth.js";
+
+const WORKER_BASE_URL = "https://statiq-assessments-worker.recruitment-552.workers.dev";
+
+let state = {
+  phase: "loading", // loading | login | linkSent | preface | assessment | done | error
+  errorMessage: "",
+  candidateEmail: "",
+  candidateName: "",
+  role: "",
+  tasks: [],
+  loggedInAt: null,
+  startedAt: null,
+  submittedAt: null,
+  answers: {}
+};
+
+function now() {
+  return new Date().toISOString();
+}
+function displayTime(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+async function init() {
+  // Did the candidate just click their magic link?
+  try {
+    const user = await completeSignInIfApplicable();
+    if (user) {
+      state.candidateEmail = user.email;
+      state.loggedInAt = now();
+      await afterLogin();
+      return;
+    }
+  } catch (err) {
+    state.phase = "error";
+    state.errorMessage = "That sign-in link is invalid or has expired. Please request a new one.";
+    render();
+    return;
+  }
+
+  // Not completing a sign-in — check if already authenticated from a prior session.
+  watchAuthState(async (user) => {
+    if (user && state.phase === "loading") {
+      state.candidateEmail = user.email;
+      state.loggedInAt = state.loggedInAt || now();
+      await afterLogin();
+    } else if (!user && state.phase === "loading") {
+      state.phase = "login";
+      render();
+    }
+  });
+}
+
+async function afterLogin() {
+  try {
+    const access = await checkAssessmentAccess(state.candidateEmail);
+    if (!access.allowed) {
+      state.phase = "error";
+      state.errorMessage = "This email isn't on our assessment list yet. Please check with the People Team, or make sure you used the email they have on file.";
+      render();
+      return;
+    }
+    state.candidateName = access.name;
+    state.role = access.role;
+    state.phase = "preface";
+    render();
+  } catch (err) {
+    state.phase = "error";
+    state.errorMessage = "We couldn't verify your access right now. Please try refreshing, or reach out to the People Team if this keeps happening.";
+    render();
+  }
+}
+
+async function handleLoginSubmit(email) {
+  state.candidateEmail = email;
+  state.phase = "loading";
+  render();
+  try {
+    await requestSignInLink(email);
+    state.phase = "linkSent";
+  } catch (err) {
+    state.phase = "error";
+    state.errorMessage = "We couldn't send a sign-in link to that address. Please double check it and try again.";
+  }
+  render();
+}
+
+async function handleStart() {
+  state.startedAt = now();
+  state.phase = "loading";
+  render();
+  try {
+    const res = await fetch(`${WORKER_BASE_URL}/get-role-tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: state.role })
+    });
+    const data = await res.json();
+    state.tasks = data.tasks || [];
+    state.phase = "assessment";
+  } catch (err) {
+    state.phase = "error";
+    state.errorMessage = "We couldn't load your tasks right now. Please try again in a moment.";
+  }
+  render();
+}
+
+async function handleSubmit() {
+  state.submittedAt = now();
+  state.phase = "loading";
+  render();
+  try {
+    const res = await fetch(`${WORKER_BASE_URL}/submit-assessment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: state.candidateEmail,
+        role: state.role,
+        name: state.candidateName,
+        loggedInAt: state.loggedInAt,
+        startedAt: state.startedAt,
+        submittedAt: state.submittedAt,
+        answers: state.answers
+      })
+    });
+    if (!res.ok) throw new Error("submit failed");
+    state.phase = "done";
+  } catch (err) {
+    state.phase = "error";
+    state.errorMessage = "Your submission didn't go through. Please try again — your answers are still here.";
+    state.submittedAt = null;
+  }
+  render();
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+
+function render() {
+  const app = document.getElementById("app");
+  let inner = "";
+
+  if (state.phase === "loading") inner = viewLoading();
+  else if (state.phase === "login") inner = viewLogin();
+  else if (state.phase === "linkSent") inner = viewLinkSent();
+  else if (state.phase === "preface") inner = viewPreface();
+  else if (state.phase === "assessment") inner = viewAssessment();
+  else if (state.phase === "done") inner = viewDone();
+  else if (state.phase === "error") inner = viewError();
+
+  app.innerHTML = `
+    <div class="stage">
+      <div class="brand-row">
+        <div class="brand-mark">S</div>
+        <div class="brand-name">Statiq <span>Assessments</span></div>
+      </div>
+      ${inner}
+    </div>
+  `;
+  attachHandlers();
+}
+
+function viewLoading() {
+  return `<div class="center-msg">Loading…</div>`;
+}
+
+function viewLogin() {
+  return `
+    <div class="card">
+      <h1>Welcome</h1>
+      <p class="muted">Enter the Gmail address the People Team has on file for you. We'll send a one-time link — no password needed.</p>
+      <label>Email address</label>
+      <input type="email" id="loginEmail" placeholder="you@gmail.com">
+      <button class="btn-primary" id="loginBtn">Send me a sign-in link</button>
+    </div>
+  `;
+}
+
+function viewLinkSent() {
+  return `
+    <div class="card" style="text-align:center;">
+      <div style="font-size:38px; margin-bottom:6px;">📩</div>
+      <h1>Check your email</h1>
+      <p class="muted">We sent a sign-in link to <b>${state.candidateEmail}</b>. Open it on this device to continue.</p>
+    </div>
+  `;
+}
+
+function viewPreface() {
+  return `
+    <div class="card">
+      <span class="pill" style="background:#e2ecf7; color:#2f5c8a;">${state.role}</span>
+      <h1 style="margin-top:12px;">Before you begin</h1>
+      <p>Once you click Start, your task list will load and the clock begins. Take a moment to get comfortable first if you need to.</p>
+      <div class="timestamp-strip">🕒 Logged in at <b>${displayTime(state.loggedInAt)}</b></div>
+      <button class="btn-primary" id="startBtn">Start Assessment</button>
+    </div>
+  `;
+}
+
+function viewAssessment() {
+  const tasksHtml = state.tasks.map((t, i) => {
+    if (t.type === "Informational Only") {
+      return `
+        <div class="task info-only">
+          <div class="task-head">
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <div class="task-number">${i+1}</div>
+              <div><h3>${t.name}</h3><span class="task-type-tag">Informational — no submission needed</span></div>
+            </div>
+          </div>
+          <p>${t.instructions}</p>
+        </div>
+      `;
+    }
+    if (t.type === "Folder Duplication") {
+      return `
+        <div class="task">
+          <div class="task-head">
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <div class="task-number">${i+1}</div>
+              <div><h3>${t.name}</h3><span class="task-type-tag">Work inside your folder</span></div>
+            </div>
+          </div>
+          <p>${t.instructions}</p>
+          <div class="folder-box">
+            📁 Folder duplication isn't wired up yet in this build — your personal working folder link will appear here.
+          </div>
+        </div>
+      `;
+    }
+    return `
+      <div class="task">
+        <div class="task-head">
+          <div style="display:flex; gap:10px; align-items:flex-start;">
+            <div class="task-number">${i+1}</div>
+            <div><h3>${t.name}</h3><span class="task-type-tag">Write your answer</span></div>
+          </div>
+        </div>
+        <p>${t.instructions}</p>
+        <textarea placeholder="Write your answer here…" data-task-name="${t.name}" oninput="window.__updateAnswer(this)"></textarea>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="timestamp-strip">
+      🕒 Logged in <b>${displayTime(state.loggedInAt)}</b> &nbsp;·&nbsp; Started <b>${displayTime(state.startedAt)}</b>
+    </div>
+    ${tasksHtml}
+    <div class="card">
+      <h2>Ready to submit?</h2>
+      <p class="muted">Once you click submit, your answers are sent to the People Team automatically, and this can't be undone.</p>
+      <button class="btn-primary" id="submitBtn">Finish / Submit Assessment</button>
+    </div>
+  `;
+}
+
+function viewDone() {
+  return `
+    <div class="card" style="text-align:center;">
+      <div style="font-size:38px; margin-bottom:6px;">✅</div>
+      <h1>Submitted</h1>
+      <p class="muted">Thanks — your assessment has been sent to the People Team. They'll follow up with next steps.</p>
+      <div class="timestamp-strip" style="justify-content:center; margin-top:20px;">
+        🕒 Started <b>${displayTime(state.startedAt)}</b> &nbsp;·&nbsp; Submitted <b>${displayTime(state.submittedAt)}</b>
+      </div>
+    </div>
+  `;
+}
+
+function viewError() {
+  return `
+    <div class="card">
+      <div class="error-box">${state.errorMessage}</div>
+      <button class="btn-primary" onclick="location.reload()">Try again</button>
+    </div>
+  `;
+}
+
+function attachHandlers() {
+  const loginBtn = document.getElementById("loginBtn");
+  if (loginBtn) {
+    loginBtn.onclick = () => {
+      const email = document.getElementById("loginEmail").value.trim();
+      if (!email) return;
+      handleLoginSubmit(email);
+    };
+  }
+  const startBtn = document.getElementById("startBtn");
+  if (startBtn) startBtn.onclick = handleStart;
+
+  const submitBtn = document.getElementById("submitBtn");
+  if (submitBtn) submitBtn.onclick = handleSubmit;
+}
+
+window.__updateAnswer = function(el) {
+  state.answers[el.dataset.taskName] = el.value;
+};
+
+init();
+</script>
+</body>
+</html>
