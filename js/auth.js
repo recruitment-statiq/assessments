@@ -15,7 +15,7 @@ import {
 } from "./firebase-config.js";
 
 // TODO: replace with the real deployed Worker URL once it exists.
-const WORKER_BASE_URL = "https://statiq-assessments-worker.recruitment-statiq.workers.dev";
+const WORKER_BASE_URL = "https://statiq-assessments-worker.recruitment-552.workers.dev";
 
 const STORAGE_KEY_EMAIL = "statiq_assessments_pending_email";
 
