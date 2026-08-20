@@ -334,7 +334,12 @@ function htmlInlineToRichText(inner) {
 }
 
 function stripTags(str) {
-  return str.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
+  // Note: deliberately no .trim() here — trimming each inline segment
+  // individually eats the space that should sit next to a bold word
+  // (e.g. "the bold word" would lose its spaces around "bold" if we
+  // trimmed the plain-text segments before/after it). Only collapse
+  // literal HTML entities; leave whitespace exactly as typed.
+  return str.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 }
 
 export default {
