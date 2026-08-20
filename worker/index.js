@@ -311,18 +311,27 @@ function htmlToNotionBlocks(html) {
  */
 function htmlInlineToRichText(inner) {
   const segments = [];
-  const boldPattern = /<(b|strong)>([\s\S]*?)<\/\1>/gi;
+  // Matches a bold OR italic tag as one unit, so mixed content splits
+  // correctly regardless of which formatting comes first.
+  const formatPattern = /<(b|strong|i|em)>([\s\S]*?)<\/\1>/gi;
   let lastIndex = 0;
   let match;
 
-  while ((match = boldPattern.exec(inner)) !== null) {
+  while ((match = formatPattern.exec(inner)) !== null) {
     if (match.index > lastIndex) {
       const plain = stripTags(inner.slice(lastIndex, match.index));
       if (plain) segments.push({ text: { content: plain } });
     }
-    const boldText = stripTags(match[2]);
-    if (boldText) segments.push({ text: { content: boldText }, annotations: { bold: true } });
-    lastIndex = boldPattern.lastIndex;
+    const tag = match[1].toLowerCase();
+    const isBold = tag === "b" || tag === "strong";
+    const formattedText = stripTags(match[2]);
+    if (formattedText) {
+      segments.push({
+        text: { content: formattedText },
+        annotations: isBold ? { bold: true } : { italic: true }
+      });
+    }
+    lastIndex = formatPattern.lastIndex;
   }
 
   if (lastIndex < inner.length) {
