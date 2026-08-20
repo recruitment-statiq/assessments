@@ -175,11 +175,56 @@ async function handleSubmitAssessment(request, env) {
     })
   });
 
-  // TODO: write page.url back into Recruiting_ROW's Assessment column and
-  // flip Assessment Review status, once that database ID + property names
-  // are confirmed.
+  // Write the submission link back into Recruiting_ROW and flip the
+  // Assessment Review status, so the existing Slack notification pattern
+  // picks it up. Matched by candidate email.
+  try {
+    await writeBackToRecruitingRow(env, email, page.url);
+  } catch (err) {
+    // The submission itself already succeeded and is safely in Notion —
+    // don't fail the whole request if the write-back has an issue.
+    // The candidate should never see an error for something on our side
+    // that doesn't affect their own submission.
+    return json({ submissionPageUrl: page.url, durationMinutes, writeBackWarning: err.message });
+  }
 
   return json({ submissionPageUrl: page.url, durationMinutes });
+}
+
+/**
+ * Finds the Recruiting_ROW page matching this candidate's email, writes
+ * the submission link into its Assessment column, and flips Assessment
+ * Review to "Ready to Review" — which is what the existing Slack
+ * notification automation watches for.
+ */
+async function writeBackToRecruitingRow(env, email, submissionUrl) {
+  const result = await notionFetch(env, `databases/${env.RECRUITING_ROW_DB_ID}/query`, {
+    method: "POST",
+    body: JSON.stringify({
+      filter: {
+        property: "Email",
+        email: { equals: email }
+      }
+    })
+  });
+
+  if (!result.results || result.results.length === 0) {
+    throw new Error(`No Recruiting_ROW page found for email ${email} — link was not written back.`);
+  }
+
+  // If more than one row matches (shouldn't normally happen), update the
+  // most recently created one rather than guessing further.
+  const targetPage = result.results[0];
+
+  await notionFetch(env, `pages/${targetPage.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      properties: {
+        "Assessment": { url: submissionUrl },
+        "Assessment Review": { select: { name: "Ready to Review" } }
+      }
+    })
+  });
 }
 
 function answersToBlocks(answers = {}) {
