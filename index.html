@@ -322,7 +322,7 @@ function viewAssessment() {
           </div>
         </div>
         <p>${t.instructions}</p>
-        <div class="md-hint">Formatting supported: <code>**bold**</code>, <code>*italic*</code>, <code># Heading</code>, <code>- bullet</code></div>
+        <div class="md-hint">Formatting supported: <code>**bold**</code>, <code>*italic*</code>, <code>- bullet</code></div>
         <textarea placeholder="Write your answer here…" data-task-name="${t.name}" oninput="window.__updateAnswer(this)"></textarea>
       </div>
     `;
@@ -382,7 +382,7 @@ function attachHandlers() {
 window.__updateAnswer = function(el) {
   // Plain text, straight from a standard textarea — the same reliable
   // capture mechanism proven throughout our earlier testing. Candidates
-  // can type simple markdown (**bold**, *italic*, # Heading, - bullet)
+  // can type simple markdown (**bold**, *italic*, - bullet)
   // and the Worker parses that markdown into real Notion formatting.
   state.answers[el.dataset.taskName] = el.value;
 };

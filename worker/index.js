@@ -243,7 +243,7 @@ function answersToBlocks(answers = {}) {
 
 /**
  * Parses simple, predictable markdown (the only formatting candidates can
- * type: **bold**, *italic*, # Heading, - bullet) into real Notion blocks.
+ * type: **bold**, *italic*, - bullet) into real Notion blocks.
  *
  * This deliberately replaced an earlier approach that parsed raw HTML from
  * a contenteditable rich-text editor. That approach was abandoned after
@@ -272,17 +272,6 @@ function markdownToNotionBlocks(text) {
 
     if (line.trim() === "") {
       flushList();
-      continue;
-    }
-
-    const headingMatch = line.match(/^#{1,3}\s+(.*)$/);
-    if (headingMatch) {
-      flushList();
-      blocks.push({
-        object: "block",
-        type: "heading_3",
-        heading_3: { rich_text: markdownInlineToRichText(headingMatch[1]) }
-      });
       continue;
     }
 
