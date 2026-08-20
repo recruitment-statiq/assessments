@@ -251,7 +251,10 @@ function answersToBlocks(answers = {}) {
 function htmlToNotionBlocks(html) {
   const blocks = [];
   // Split into top-level elements: <h3>...</h3>, <p>...</p>, <ul>...</ul>
-  const topLevelPattern = /<(h3|p|ul)[^>]*>([\s\S]*?)<\/\1>/gi;
+  // Note: contenteditable commonly wraps new lines in plain <div> tags
+  // (not <p>), especially in Chrome/Safari when pressing Enter. Treating
+  // div the same as p is required, or entire lines get silently dropped.
+  const topLevelPattern = /<(h3|p|div|ul)[^>]*>([\s\S]*?)<\/\1>/gi;
   let match;
   let matchedAny = false;
 
