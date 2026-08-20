@@ -44,22 +44,8 @@
   }
   textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
   input:focus, textarea:focus { outline: none; border-color: var(--accent); background: #fff; }
-  .rte-toolbar { display: flex; gap: 4px; margin-bottom: 8px; }
-  .rte-btn {
-    background: var(--accent-soft); color: var(--text); padding: 6px 11px; font-size: 13px;
-    border-radius: 6px; font-weight: 700; min-width: 30px; text-align: center;
-  }
-  .rte-btn.active { background: var(--accent); color: #fff; }
-  .rte-box {
-    width: 100%; min-height: 110px; padding: 11px 12px; border: 1px solid var(--border);
-    border-radius: 8px; font-size: 14.5px; font-family: inherit; background: #fcfcfb;
-    color: var(--text); margin-bottom: 14px; line-height: 1.55; outline: none;
-  }
-  .rte-box:focus { border-color: var(--accent); background: #fff; }
-  .rte-box:empty:before { content: attr(data-placeholder); color: #9a9a95; }
-  .rte-box h3 { font-size: 15px; margin: 4px 0; }
-  .rte-box ul { margin: 4px 0; padding-left: 22px; }
-  .rte-box p { margin: 0 0 8px; }
+  .md-hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .md-hint code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
   button {
     font-family: inherit; font-size: 14px; font-weight: 600; border-radius: 8px;
     padding: 12px 18px; border: none; cursor: pointer; transition: opacity .15s ease;
@@ -336,13 +322,8 @@ function viewAssessment() {
           </div>
         </div>
         <p>${t.instructions}</p>
-        <div class="rte-toolbar">
-          <button type="button" class="rte-btn" onclick="window.__rteCmd(this, 'bold')">B</button>
-          <button type="button" class="rte-btn" onclick="window.__rteCmd(this, 'italic')" style="font-style:italic;">I</button>
-          <button type="button" class="rte-btn" onclick="window.__rteCmd(this, 'insertUnorderedList')">&bull; List</button>
-          <button type="button" class="rte-btn" onclick="window.__rteHeading(this)" title="Turns the current line into a heading">Heading</button>
-        </div>
-        <div class="rte-box" contenteditable="true" data-placeholder="Write your answer here…" data-task-name="${t.name}" oninput="window.__updateAnswer(this)"></div>
+        <div class="md-hint">Formatting supported: <code>**bold**</code>, <code>*italic*</code>, <code># Heading</code>, <code>- bullet</code></div>
+        <textarea placeholder="Write your answer here…" data-task-name="${t.name}" oninput="window.__updateAnswer(this)"></textarea>
       </div>
     `;
   }).join("");
@@ -399,24 +380,11 @@ function attachHandlers() {
 }
 
 window.__updateAnswer = function(el) {
-  // Store the formatted HTML, not plain text — this is what lets bold,
-  // bullets, and headings survive the trip into the Notion submission page.
-  state.answers[el.dataset.taskName] = el.innerHTML;
-};
-
-window.__rteCmd = function(btn, command) {
-  document.execCommand(command, false, null);
-  btn.classList.toggle("active", document.queryCommandState(command));
-  const box = btn.closest(".task").querySelector(".rte-box");
-  box.focus();
-  window.__updateAnswer(box);
-};
-
-window.__rteHeading = function(btn) {
-  document.execCommand("formatBlock", false, "h3");
-  const box = btn.closest(".task").querySelector(".rte-box");
-  box.focus();
-  window.__updateAnswer(box);
+  // Plain text, straight from a standard textarea — the same reliable
+  // capture mechanism proven throughout our earlier testing. Candidates
+  // can type simple markdown (**bold**, *italic*, # Heading, - bullet)
+  // and the Worker parses that markdown into real Notion formatting.
+  state.answers[el.dataset.taskName] = el.value;
 };
 
 init();

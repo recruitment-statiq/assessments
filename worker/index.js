@@ -229,159 +229,127 @@ async function writeBackToRecruitingRow(env, email, submissionUrl) {
 
 function answersToBlocks(answers = {}) {
   const blocks = [];
-  for (const [taskName, html] of Object.entries(answers)) {
-    if (!html || !html.trim()) continue;
+  for (const [taskName, text] of Object.entries(answers)) {
+    if (!text || !text.trim()) continue;
     blocks.push({
       object: "block",
       type: "heading_3",
       heading_3: { rich_text: [{ text: { content: taskName } }] }
     });
-    blocks.push(...htmlToNotionBlocks(html));
+    blocks.push(...markdownToNotionBlocks(text));
   }
   return blocks;
 }
 
 /**
- * Converts the limited HTML our editor produces (p, strong, h3, ul/li)
- * into matching Notion blocks. This is intentionally narrow — the editor
- * never produces anything outside this set, so a full HTML parser isn't
- * needed. Falls back to a plain paragraph for any content that doesn't
- * match a recognized tag, so nothing is silently dropped.
+ * Parses simple, predictable markdown (the only formatting candidates can
+ * type: **bold**, *italic*, # Heading, - bullet) into real Notion blocks.
+ *
+ * This deliberately replaced an earlier approach that parsed raw HTML from
+ * a contenteditable rich-text editor. That approach was abandoned after
+ * repeated, hard-to-fully-eliminate content loss caused by inconsistent
+ * browser-generated HTML (stray <br> tags, <div> vs <p> wrapping, etc).
+ * Markdown has a fixed, predictable grammar with no such ambiguity, and
+ * the candidate's raw text is what actually gets sent — nothing is lost
+ * even if a formatting mark isn't recognized, since unrecognized syntax
+ * just displays as plain characters rather than disappearing.
  */
-/**
- * contenteditable output is genuinely inconsistent across browsers and
- * even within one session (div-wrapped lines, bare <br> line breaks,
- * <ul> sitting outside any wrapper, occasional unwrapped plain text).
- * This normalizes all of that into a consistent set of top-level <p>,
- * <h3>, and <ul> blocks before the real parser ever sees it, rather than
- * trying to special-case every browser quirk in the parser itself.
- */
-function normalizeEditorHtml(html) {
-  if (!html) return "";
+function markdownToNotionBlocks(text) {
+  const blocks = [];
+  const lines = text.split("\n");
 
-  // A <br> inside contenteditable almost always means "the user pressed
-  // Enter and the browser didn't wrap it in a div/p." Splitting the
-  // surrounding content into separate divs at that point means the
-  // existing top-level block parser (which already understands h3/p/div/ul)
-  // picks each piece up correctly, instead of the br being silently
-  // absorbed into the middle of one block and swallowing everything after it.
-  let normalized = html.replace(/<br\s*\/?>/gi, "</div><div>");
+  let currentListItems = null;
 
-  // If the content didn't start inside a recognized block tag at all
-  // (bare text with no wrapper), give it one so it isn't skipped by the
-  // top-level matcher.
-  if (!/^\s*<(h3|p|div|ul)[\s>]/i.test(normalized)) {
-    normalized = `<div>${normalized}</div>`;
+  function flushList() {
+    if (currentListItems && currentListItems.length > 0) {
+      blocks.push(...currentListItems);
+    }
+    currentListItems = null;
   }
 
-  return normalized;
-}
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
 
-function htmlToNotionBlocks(rawHtml) {
-  const html = normalizeEditorHtml(rawHtml);
-  const blocks = [];
-  // Split into top-level elements: <h3>...</h3>, <p>...</p>, <ul>...</ul>
-  // Note: contenteditable commonly wraps new lines in plain <div> tags
-  // (not <p>), especially in Chrome/Safari when pressing Enter. Treating
-  // div the same as p is required, or entire lines get silently dropped.
-  const topLevelPattern = /<(h3|p|div|ul)[^>]*>([\s\S]*?)<\/\1>/gi;
-  let match;
-  let matchedAny = false;
+    if (line.trim() === "") {
+      flushList();
+      continue;
+    }
 
-  while ((match = topLevelPattern.exec(html)) !== null) {
-    matchedAny = true;
-    const [, tag, inner] = match;
-
-    if (tag.toLowerCase() === "h3") {
+    const headingMatch = line.match(/^#{1,3}\s+(.*)$/);
+    if (headingMatch) {
+      flushList();
       blocks.push({
         object: "block",
         type: "heading_3",
-        heading_3: { rich_text: htmlInlineToRichText(inner) }
+        heading_3: { rich_text: markdownInlineToRichText(headingMatch[1]) }
       });
-    } else if (tag.toLowerCase() === "ul") {
-      const liPattern = /<li[^>]*>([\s\S]*?)<\/li>/gi;
-      let liMatch;
-      while ((liMatch = liPattern.exec(inner)) !== null) {
-        blocks.push({
-          object: "block",
-          type: "bulleted_list_item",
-          bulleted_list_item: { rich_text: htmlInlineToRichText(liMatch[1]) }
-        });
-      }
-    } else {
-      // paragraph
-      const richText = htmlInlineToRichText(inner);
-      if (richText.length > 0) {
-        blocks.push({
-          object: "block",
-          type: "paragraph",
-          paragraph: { rich_text: richText }
-        });
-      }
+      continue;
     }
-  }
 
-  // If nothing matched the expected tags (e.g. plain text typed with no
-  // formatting, contenteditable sometimes omits wrapping <p> tags), fall
-  // back to treating the whole thing as one paragraph.
-  if (!matchedAny) {
-    const richText = htmlInlineToRichText(html);
-    if (richText.length > 0) {
-      blocks.push({
+    const bulletMatch = line.match(/^[-*]\s+(.*)$/);
+    if (bulletMatch) {
+      if (!currentListItems) currentListItems = [];
+      currentListItems.push({
         object: "block",
-        type: "paragraph",
-        paragraph: { rich_text: richText }
+        type: "bulleted_list_item",
+        bulleted_list_item: { rich_text: markdownInlineToRichText(bulletMatch[1]) }
       });
+      continue;
     }
+
+    // Plain paragraph line
+    flushList();
+    blocks.push({
+      object: "block",
+      type: "paragraph",
+      paragraph: { rich_text: markdownInlineToRichText(line) }
+    });
   }
 
+  flushList();
   return blocks;
 }
 
 /**
- * Converts inline HTML (text possibly wrapped in <b>/<strong>) into
- * Notion rich_text segments, preserving bold formatting.
+ * Converts inline markdown (**bold**, *italic*) into Notion rich_text
+ * segments. Plain text with no markdown passes through unchanged — this
+ * never drops content, worst case it just doesn't apply formatting to
+ * something that wasn't valid markdown syntax.
  */
-function htmlInlineToRichText(inner) {
+function markdownInlineToRichText(line) {
   const segments = [];
-  // Matches a bold OR italic tag as one unit, so mixed content splits
-  // correctly regardless of which formatting comes first.
-  const formatPattern = /<(b|strong|i|em)>([\s\S]*?)<\/\1>/gi;
+  // Matches **bold** or *italic* (bold checked first so ** isn't parsed
+  // as two separate italic markers).
+  const pattern = /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)/g;
   let lastIndex = 0;
   let match;
 
-  while ((match = formatPattern.exec(inner)) !== null) {
+  while ((match = pattern.exec(line)) !== null) {
     if (match.index > lastIndex) {
-      const plain = stripTags(inner.slice(lastIndex, match.index));
-      if (plain) segments.push({ text: { content: plain } });
+      segments.push({ text: { content: line.slice(lastIndex, match.index) } });
     }
-    const tag = match[1].toLowerCase();
-    const isBold = tag === "b" || tag === "strong";
-    const formattedText = stripTags(match[2]);
-    if (formattedText) {
-      segments.push({
-        text: { content: formattedText },
-        annotations: isBold ? { bold: true } : { italic: true }
-      });
+    if (match[1]) {
+      // bold
+      segments.push({ text: { content: match[2] }, annotations: { bold: true } });
+    } else if (match[3]) {
+      // italic
+      segments.push({ text: { content: match[4] }, annotations: { italic: true } });
     }
-    lastIndex = formatPattern.lastIndex;
+    lastIndex = pattern.lastIndex;
   }
 
-  if (lastIndex < inner.length) {
-    const plain = stripTags(inner.slice(lastIndex));
-    if (plain) segments.push({ text: { content: plain } });
+  if (lastIndex < line.length) {
+    segments.push({ text: { content: line.slice(lastIndex) } });
+  }
+
+  // If the whole line was empty after parsing (shouldn't normally happen),
+  // still return a single empty-text segment so Notion doesn't error on
+  // an empty rich_text array.
+  if (segments.length === 0) {
+    segments.push({ text: { content: line } });
   }
 
   return segments;
-}
-
-function stripTags(str) {
-  // Note: deliberately no .trim() here — trimming each inline segment
-  // individually eats the space that should sit next to a bold word
-  // (e.g. "the bold word" would lose its spaces around "bold" if we
-  // trimmed the plain-text segments before/after it). Only collapse
-  // literal HTML entities; leave whitespace exactly as typed.
-  return str.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 }
 
 export default {
