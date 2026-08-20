@@ -248,7 +248,37 @@ function answersToBlocks(answers = {}) {
  * needed. Falls back to a plain paragraph for any content that doesn't
  * match a recognized tag, so nothing is silently dropped.
  */
-function htmlToNotionBlocks(html) {
+/**
+ * contenteditable output is genuinely inconsistent across browsers and
+ * even within one session (div-wrapped lines, bare <br> line breaks,
+ * <ul> sitting outside any wrapper, occasional unwrapped plain text).
+ * This normalizes all of that into a consistent set of top-level <p>,
+ * <h3>, and <ul> blocks before the real parser ever sees it, rather than
+ * trying to special-case every browser quirk in the parser itself.
+ */
+function normalizeEditorHtml(html) {
+  if (!html) return "";
+
+  // A <br> inside contenteditable almost always means "the user pressed
+  // Enter and the browser didn't wrap it in a div/p." Splitting the
+  // surrounding content into separate divs at that point means the
+  // existing top-level block parser (which already understands h3/p/div/ul)
+  // picks each piece up correctly, instead of the br being silently
+  // absorbed into the middle of one block and swallowing everything after it.
+  let normalized = html.replace(/<br\s*\/?>/gi, "</div><div>");
+
+  // If the content didn't start inside a recognized block tag at all
+  // (bare text with no wrapper), give it one so it isn't skipped by the
+  // top-level matcher.
+  if (!/^\s*<(h3|p|div|ul)[\s>]/i.test(normalized)) {
+    normalized = `<div>${normalized}</div>`;
+  }
+
+  return normalized;
+}
+
+function htmlToNotionBlocks(rawHtml) {
+  const html = normalizeEditorHtml(rawHtml);
   const blocks = [];
   // Split into top-level elements: <h3>...</h3>, <p>...</p>, <ul>...</ul>
   // Note: contenteditable commonly wraps new lines in plain <div> tags
