@@ -229,20 +229,112 @@ async function writeBackToRecruitingRow(env, email, submissionUrl) {
 
 function answersToBlocks(answers = {}) {
   const blocks = [];
-  for (const [taskName, text] of Object.entries(answers)) {
-    if (!text) continue;
+  for (const [taskName, html] of Object.entries(answers)) {
+    if (!html || !html.trim()) continue;
     blocks.push({
       object: "block",
       type: "heading_3",
       heading_3: { rich_text: [{ text: { content: taskName } }] }
     });
-    blocks.push({
-      object: "block",
-      type: "paragraph",
-      paragraph: { rich_text: [{ text: { content: text } }] }
-    });
+    blocks.push(...htmlToNotionBlocks(html));
   }
   return blocks;
+}
+
+/**
+ * Converts the limited HTML our editor produces (p, strong, h3, ul/li)
+ * into matching Notion blocks. This is intentionally narrow — the editor
+ * never produces anything outside this set, so a full HTML parser isn't
+ * needed. Falls back to a plain paragraph for any content that doesn't
+ * match a recognized tag, so nothing is silently dropped.
+ */
+function htmlToNotionBlocks(html) {
+  const blocks = [];
+  // Split into top-level elements: <h3>...</h3>, <p>...</p>, <ul>...</ul>
+  const topLevelPattern = /<(h3|p|ul)[^>]*>([\s\S]*?)<\/\1>/gi;
+  let match;
+  let matchedAny = false;
+
+  while ((match = topLevelPattern.exec(html)) !== null) {
+    matchedAny = true;
+    const [, tag, inner] = match;
+
+    if (tag.toLowerCase() === "h3") {
+      blocks.push({
+        object: "block",
+        type: "heading_3",
+        heading_3: { rich_text: htmlInlineToRichText(inner) }
+      });
+    } else if (tag.toLowerCase() === "ul") {
+      const liPattern = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+      let liMatch;
+      while ((liMatch = liPattern.exec(inner)) !== null) {
+        blocks.push({
+          object: "block",
+          type: "bulleted_list_item",
+          bulleted_list_item: { rich_text: htmlInlineToRichText(liMatch[1]) }
+        });
+      }
+    } else {
+      // paragraph
+      const richText = htmlInlineToRichText(inner);
+      if (richText.length > 0) {
+        blocks.push({
+          object: "block",
+          type: "paragraph",
+          paragraph: { rich_text: richText }
+        });
+      }
+    }
+  }
+
+  // If nothing matched the expected tags (e.g. plain text typed with no
+  // formatting, contenteditable sometimes omits wrapping <p> tags), fall
+  // back to treating the whole thing as one paragraph.
+  if (!matchedAny) {
+    const richText = htmlInlineToRichText(html);
+    if (richText.length > 0) {
+      blocks.push({
+        object: "block",
+        type: "paragraph",
+        paragraph: { rich_text: richText }
+      });
+    }
+  }
+
+  return blocks;
+}
+
+/**
+ * Converts inline HTML (text possibly wrapped in <b>/<strong>) into
+ * Notion rich_text segments, preserving bold formatting.
+ */
+function htmlInlineToRichText(inner) {
+  const segments = [];
+  const boldPattern = /<(b|strong)>([\s\S]*?)<\/\1>/gi;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = boldPattern.exec(inner)) !== null) {
+    if (match.index > lastIndex) {
+      const plain = stripTags(inner.slice(lastIndex, match.index));
+      if (plain) segments.push({ text: { content: plain } });
+    }
+    const boldText = stripTags(match[2]);
+    if (boldText) segments.push({ text: { content: boldText }, annotations: { bold: true } });
+    lastIndex = boldPattern.lastIndex;
+  }
+
+  if (lastIndex < inner.length) {
+    const plain = stripTags(inner.slice(lastIndex));
+    if (plain) segments.push({ text: { content: plain } });
+  }
+
+  return segments;
+}
+
+function stripTags(str) {
+  return str.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
 }
 
 export default {
