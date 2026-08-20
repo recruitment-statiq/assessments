@@ -339,7 +339,7 @@ function viewAssessment() {
         <div class="rte-toolbar">
           <button type="button" class="rte-btn" onclick="window.__rteCmd(this, 'bold')">B</button>
           <button type="button" class="rte-btn" onclick="window.__rteCmd(this, 'insertUnorderedList')">&bull; List</button>
-          <button type="button" class="rte-btn" onclick="window.__rteHeading(this)">H</button>
+          <button type="button" class="rte-btn" onclick="window.__rteHeading(this)" title="Turns the current line into a heading">Heading</button>
         </div>
         <div class="rte-box" contenteditable="true" data-placeholder="Write your answer here…" data-task-name="${t.name}" oninput="window.__updateAnswer(this)"></div>
       </div>
