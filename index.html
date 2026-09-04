@@ -171,12 +171,17 @@ async function handleLoginSubmit(email) {
 async function handleStart() {
   state.startedAt = now();
   state.phase = "loading";
+  state.loadingMessage = "Setting up your workspace…";
   render();
   try {
     const res = await fetch(`${WORKER_BASE_URL}/get-role-tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: state.role })
+      body: JSON.stringify({
+        role: state.role,
+        candidateName: state.candidateName,
+        candidateEmail: state.candidateEmail
+      })
     });
     const data = await res.json();
     state.tasks = data.tasks || [];
@@ -245,7 +250,7 @@ function render() {
 }
 
 function viewLoading() {
-  return `<div class="center-msg">Loading…</div>`;
+  return `<div class="center-msg">${state.loadingMessage || "Loading…"}</div>`;
 }
 
 function viewLogin() {
@@ -299,6 +304,9 @@ function viewAssessment() {
       `;
     }
     if (t.type === "Folder Duplication") {
+      const folderBox = t.workingFolderUrl
+        ? `<div class="folder-box">📁 Your personal working folder: <a href="${t.workingFolderUrl}" target="_blank" rel="noopener">${t.workingFolderUrl}</a></div>`
+        : `<div class="folder-box">📁 We're still setting up your working folder — if this doesn't appear shortly, reach out to the People Team and we'll get it sorted.</div>`;
       return `
         <div class="task">
           <div class="task-head">
@@ -308,9 +316,7 @@ function viewAssessment() {
             </div>
           </div>
           <p>${t.instructions}</p>
-          <div class="folder-box">
-            📁 Folder duplication isn't wired up yet in this build — your personal working folder link will appear here.
-          </div>
+          ${folderBox}
         </div>
       `;
     }

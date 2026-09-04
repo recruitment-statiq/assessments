@@ -86,13 +86,16 @@ async function handleCheckAccess(request, env) {
 
 /**
  * POST /get-role-tasks
- * body: { role }
+ * body: { role, candidateName, candidateEmail }
  * Fetches the ordered task list + instructions for a role from
  * Assessment_Roles. Instructions come from each task page's body,
- * not just its properties.
+ * not just its properties. If the role includes a Folder Duplication
+ * task, this also triggers the one-time folder copy via Apps Script
+ * and attaches the resulting link to every folder-type task in the
+ * response, so the app never needs a second round-trip for it.
  */
 async function handleGetRoleTasks(request, env) {
-  const { role } = await request.json();
+  const { role, candidateName, candidateEmail } = await request.json();
   if (!role) return json({ error: "role is required" }, 400);
 
   const result = await notionFetch(env, `databases/${env.ASSESSMENT_ROLES_DB_ID}/query`, {
@@ -107,22 +110,98 @@ async function handleGetRoleTasks(request, env) {
   });
 
   const tasks = [];
+  let needsFolderDuplication = false;
+
   for (const page of result.results || []) {
     const props = page.properties;
     const blocks = await notionFetch(env, `blocks/${page.id}/children`, { method: "GET" });
     const instructions = blocksToPlainText(blocks.results || []);
+    const type = props["Task Type"]?.select?.name || "";
+
+    if (type === "Folder Duplication") needsFolderDuplication = true;
 
     tasks.push({
       name: props["Task Name"]?.title?.[0]?.plain_text || "",
       order: props["Task Order"]?.number ?? 0,
-      type: props["Task Type"]?.select?.name || "",
+      type,
       requiresSubmission: props["Requires Submission"]?.checkbox ?? true,
       templateFolderId: props["Template Folder ID"]?.rich_text?.[0]?.plain_text || null,
       instructions
     });
   }
 
-  return json({ tasks });
+  let workingFolderUrl = null;
+  let folderDuplicationWarning = null;
+
+  if (needsFolderDuplication && candidateName && candidateEmail) {
+    try {
+      workingFolderUrl = await duplicateAssessmentFolder(env, candidateName, candidateEmail);
+    } catch (err) {
+      // Don't block the candidate's whole assessment on this failing —
+      // they can still see instructions and work on the text-based tasks.
+      // Alert the People Team so someone can create the folder manually.
+      folderDuplicationWarning = err.message;
+      await notifyFolderDuplicationFailure(env, candidateName, candidateEmail, err.message);
+    }
+  }
+
+  // Attach the same folder link to every folder-type task — they all
+  // share one duplicated working folder, not one each.
+  for (const task of tasks) {
+    if (task.type === "Folder Duplication") {
+      task.workingFolderUrl = workingFolderUrl;
+    }
+  }
+
+  return json({ tasks, folderDuplicationWarning });
+}
+
+/**
+ * Calls the Apps Script Web App (running as recruitment@statiq.club) to
+ * duplicate the Client Manager Team Lead template folder for this
+ * candidate and share it with them. Returns the new folder's URL.
+ */
+async function duplicateAssessmentFolder(env, candidateName, candidateEmail) {
+  const res = await fetch(env.APPS_SCRIPT_FOLDER_DUPLICATION_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidateName, candidateEmail })
+  });
+
+  if (!res.ok) {
+    throw new Error(`Apps Script returned ${res.status}`);
+  }
+
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error);
+  }
+  if (!data.folderUrl) {
+    throw new Error("Apps Script did not return a folder URL");
+  }
+
+  return data.folderUrl;
+}
+
+/**
+ * Posts a Slack alert when folder duplication fails, so someone on the
+ * People Team can create and share the folder manually rather than the
+ * candidate silently getting no working folder.
+ */
+async function notifyFolderDuplicationFailure(env, candidateName, candidateEmail, errorMessage) {
+  if (!env.SLACK_WEBHOOK_URL) return; // not configured — fail silently rather than throw
+  try {
+    await fetch(env.SLACK_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: `⚠️ Folder duplication failed for *${candidateName}* (${candidateEmail}). They can still see their assessment, but their working folder wasn't created automatically. Please create and share it manually.\n\nError: ${errorMessage}`
+      })
+    });
+  } catch (e) {
+    // If even the alert fails, there's nothing more we can do here —
+    // this must never throw and block the candidate's response.
+  }
 }
 
 function blocksToPlainText(blocks) {
