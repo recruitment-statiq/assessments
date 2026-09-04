@@ -186,11 +186,57 @@ async function handleStart() {
     const data = await res.json();
     state.tasks = data.tasks || [];
     state.phase = "assessment";
+
+    if (data.folderDuplicationInProgress) {
+      pollForFolderReady();
+    }
   } catch (err) {
     state.phase = "error";
     state.errorMessage = "We couldn't load your tasks right now. Please try again in a moment.";
   }
   render();
+}
+
+/**
+ * Polls the Worker every 4 seconds for up to ~2 minutes to see if the
+ * candidate's working folder is ready yet. Updates the folder-box(es)
+ * directly in the DOM rather than a full re-render, so it doesn't
+ * disrupt anything the candidate might already be typing elsewhere on
+ * the page.
+ */
+function pollForFolderReady() {
+  const maxAttempts = 30; // ~2 minutes at 4s intervals
+  let attempts = 0;
+
+  const interval = setInterval(async () => {
+    attempts++;
+    try {
+      const res = await fetch(`${WORKER_BASE_URL}/check-folder-status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: state.candidateEmail })
+      });
+      const data = await res.json();
+
+      if (data.ready && data.folderUrl) {
+        state.workingFolderUrl = data.folderUrl;
+        clearInterval(interval);
+        document.querySelectorAll("[data-folder-slot]").forEach(el => {
+          el.innerHTML = `📁 Your personal working folder: <a href="${data.folderUrl}" target="_blank" rel="noopener">${data.folderUrl}</a>`;
+        });
+      }
+    } catch (err) {
+      // A single failed poll isn't worth alarming the candidate over —
+      // just try again next interval.
+    }
+
+    if (attempts >= maxAttempts) {
+      clearInterval(interval);
+      document.querySelectorAll("[data-folder-slot]").forEach(el => {
+        el.innerHTML = `📁 This is taking longer than expected — please reach out to the People Team and we'll get your folder set up.`;
+      });
+    }
+  }, 4000);
 }
 
 async function handleSubmit() {
@@ -304,9 +350,9 @@ function viewAssessment() {
       `;
     }
     if (t.type === "Folder Duplication") {
-      const folderBox = t.workingFolderUrl
-        ? `<div class="folder-box">📁 Your personal working folder: <a href="${t.workingFolderUrl}" target="_blank" rel="noopener">${t.workingFolderUrl}</a></div>`
-        : `<div class="folder-box">📁 We're still setting up your working folder — if this doesn't appear shortly, reach out to the People Team and we'll get it sorted.</div>`;
+      const folderBox = state.workingFolderUrl
+        ? `<div class="folder-box" data-folder-slot>📁 Your personal working folder: <a href="${state.workingFolderUrl}" target="_blank" rel="noopener">${state.workingFolderUrl}</a></div>`
+        : `<div class="folder-box" data-folder-slot>📁 Setting up your working folder — this usually takes under a minute. This message will update automatically once it's ready.</div>`;
       return `
         <div class="task">
           <div class="task-head">

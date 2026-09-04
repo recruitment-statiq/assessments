@@ -94,7 +94,7 @@ async function handleCheckAccess(request, env) {
  * and attaches the resulting link to every folder-type task in the
  * response, so the app never needs a second round-trip for it.
  */
-async function handleGetRoleTasks(request, env) {
+async function handleGetRoleTasks(request, env, ctx) {
   const { role, candidateName, candidateEmail } = await request.json();
   if (!role) return json({ error: "role is required" }, 400);
 
@@ -130,30 +130,21 @@ async function handleGetRoleTasks(request, env) {
     });
   }
 
-  let workingFolderUrl = null;
-  let folderDuplicationWarning = null;
-
+  // Folder duplication can genuinely take longer than a request should
+  // ever make a candidate wait (real files inside real subfolders take
+  // real time to copy). Rather than blocking this response on it — which
+  // previously caused real timeouts — kick it off in the background via
+  // waitUntil, and store its result in KV-less fashion via the
+  // Assessment_Access page itself, which the frontend polls separately.
   if (needsFolderDuplication && candidateName && candidateEmail) {
-    try {
-      workingFolderUrl = await duplicateAssessmentFolder(env, candidateName, candidateEmail);
-    } catch (err) {
-      // Don't block the candidate's whole assessment on this failing —
-      // they can still see instructions and work on the text-based tasks.
-      // Alert the People Team so someone can create the folder manually.
-      folderDuplicationWarning = err.message;
-      await notifyFolderDuplicationFailure(env, candidateName, candidateEmail, err.message);
-    }
+    ctx.waitUntil(
+      duplicateAssessmentFolder(env, candidateName, candidateEmail)
+        .then(folderUrl => markFolderReady(env, candidateEmail, folderUrl))
+        .catch(err => notifyFolderDuplicationFailure(env, candidateName, candidateEmail, err.message))
+    );
   }
 
-  // Attach the same folder link to every folder-type task — they all
-  // share one duplicated working folder, not one each.
-  for (const task of tasks) {
-    if (task.type === "Folder Duplication") {
-      task.workingFolderUrl = workingFolderUrl;
-    }
-  }
-
-  return json({ tasks, folderDuplicationWarning });
+  return json({ tasks, folderDuplicationInProgress: needsFolderDuplication });
 }
 
 /**
@@ -181,6 +172,56 @@ async function duplicateAssessmentFolder(env, candidateName, candidateEmail) {
   }
 
   return data.folderUrl;
+}
+
+/**
+ * Writes the finished folder link onto the candidate's Assessment_Access
+ * page (found by email) so the frontend can poll for it. This reuses a
+ * database that already exists per-candidate rather than requiring a
+ * separate KV namespace just for this transient status.
+ */
+async function markFolderReady(env, candidateEmail, folderUrl) {
+  const result = await notionFetch(env, `databases/${env.ASSESSMENT_ACCESS_DB_ID}/query`, {
+    method: "POST",
+    body: JSON.stringify({
+      filter: { property: "Email", email: { equals: candidateEmail } }
+    })
+  });
+  if (!result.results || result.results.length === 0) return;
+
+  await notionFetch(env, `pages/${result.results[0].id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      properties: {
+        "Working Folder Link": { url: folderUrl }
+      }
+    })
+  });
+}
+
+/**
+ * POST /check-folder-status
+ * body: { email }
+ * The frontend polls this every few seconds after Start, until it
+ * returns a folderUrl (or gives up after a reasonable number of tries).
+ */
+async function handleCheckFolderStatus(request, env) {
+  const { email } = await request.json();
+  if (!email) return json({ error: "email is required" }, 400);
+
+  const result = await notionFetch(env, `databases/${env.ASSESSMENT_ACCESS_DB_ID}/query`, {
+    method: "POST",
+    body: JSON.stringify({
+      filter: { property: "Email", email: { equals: email } }
+    })
+  });
+
+  if (!result.results || result.results.length === 0) {
+    return json({ ready: false });
+  }
+
+  const folderUrl = result.results[0].properties["Working Folder Link"]?.url || null;
+  return json({ ready: !!folderUrl, folderUrl });
 }
 
 /**
@@ -421,7 +462,7 @@ function markdownInlineToRichText(line) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders() });
     }
@@ -433,7 +474,10 @@ export default {
         return await handleCheckAccess(request, env);
       }
       if (request.method === "POST" && url.pathname === "/get-role-tasks") {
-        return await handleGetRoleTasks(request, env);
+        return await handleGetRoleTasks(request, env, ctx);
+      }
+      if (request.method === "POST" && url.pathname === "/check-folder-status") {
+        return await handleCheckFolderStatus(request, env);
       }
       if (request.method === "POST" && url.pathname === "/submit-assessment") {
         return await handleSubmitAssessment(request, env);
