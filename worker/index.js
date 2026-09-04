@@ -193,7 +193,10 @@ async function markFolderReady(env, candidateEmail, folderUrl) {
     method: "PATCH",
     body: JSON.stringify({
       properties: {
-        "Working Folder Link": { url: folderUrl }
+        // Reusing Recruiting_ROW Link as transient storage for the working
+        // folder URL — Assessment_Access doesn't have a dedicated field for
+        // this, and this one is otherwise unused at this stage of the flow.
+        "Recruiting_ROW Link": { url: folderUrl }
       }
     })
   });
@@ -220,7 +223,7 @@ async function handleCheckFolderStatus(request, env) {
     return json({ ready: false });
   }
 
-  const folderUrl = result.results[0].properties["Working Folder Link"]?.url || null;
+  const folderUrl = result.results[0].properties["Recruiting_ROW Link"]?.url || null;
   return json({ ready: !!folderUrl, folderUrl });
 }
 
