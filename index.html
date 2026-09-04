@@ -148,12 +148,17 @@ async function afterLogin() {
     state.phase = "preface";
     render();
 
-    // Folder duplication (if this role needs it) started at login on the
-    // Worker side — begin polling now, so it's likely already done by
-    // the time the candidate finishes reading the preface and clicks
-    // Start.
+    // Under the current flow, the working folder is created before the
+    // candidate ever logs in, so it's normally already sitting on their
+    // access record. Only fall back to polling in the rare case it
+    // genuinely isn't ready yet (e.g. access was just granted moments
+    // ago and duplication is still running).
     if (access.role === "Client Manager Team Lead") {
-      pollForFolderReady();
+      if (access.workingFolderUrl) {
+        state.workingFolderUrl = access.workingFolderUrl;
+      } else {
+        pollForFolderReady();
+      }
     }
   } catch (err) {
     state.phase = "error";
@@ -195,7 +200,7 @@ async function handleStart() {
     state.tasks = data.tasks || [];
     state.phase = "assessment";
 
-    if (data.folderDuplicationInProgress) {
+    if (data.folderDuplicationInProgress && !state.workingFolderUrl) {
       pollForFolderReady();
     }
   } catch (err) {

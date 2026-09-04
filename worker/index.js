@@ -54,7 +54,7 @@ async function notionFetch(env, path, options = {}) {
  * allowed in, and if so, their name + assigned role — nothing about
  * any other candidate.
  */
-async function handleCheckAccess(request, env, ctx) {
+async function handleCheckAccess(request, env) {
   const { email } = await request.json();
   if (!email) return json({ error: "email is required" }, 400);
 
@@ -74,31 +74,14 @@ async function handleCheckAccess(request, env, ctx) {
 
   const page = result.results[0];
   const props = page.properties;
-  const role = props["Role"]?.select?.name || "";
-  const name = props["Candidate Name"]?.title?.[0]?.plain_text || "";
-  const existingFolderLink = props["Recruiting_ROW Link"]?.url || null;
-
-  // Kick off folder duplication as early as possible — right when the
-  // candidate first logs in, not when they click Start. The folder's
-  // contents don't reveal any task instructions (those live in the app),
-  // so there's no early-access concern, and this gives duplication the
-  // maximum possible head start — likely finished before the candidate
-  // even reaches the task screen. Guarded so repeat logins don't
-  // re-trigger it once a folder already exists.
-  if (role === "Client Manager Team Lead" && !existingFolderLink && name) {
-    ctx.waitUntil(
-      duplicateAssessmentFolder(env, name, email)
-        .then(folderUrl => markFolderReady(env, email, folderUrl))
-        .catch(err => notifyFolderDuplicationFailure(env, name, email, err.message))
-    );
-  }
 
   return json({
     allowed: true,
-    name,
-    role,
+    name: props["Candidate Name"]?.title?.[0]?.plain_text || "",
+    role: props["Role"]?.select?.name || "",
     status: props["Status"]?.select?.name || "",
-    accessPageId: page.id
+    accessPageId: page.id,
+    workingFolderUrl: props["Recruiting_ROW Link"]?.url || null
   });
 }
 
@@ -471,6 +454,61 @@ function markdownInlineToRichText(line) {
   return segments;
 }
 
+/**
+ * POST /grant-access
+ * body: { candidateName, candidateEmail, role, assignedBy }
+ *
+ * Creates the Assessment_Access row for a candidate. If the role needs a
+ * working folder (currently just Client Manager Team Lead), this waits
+ * for the ENTIRE duplication to finish — including files that take real
+ * time to copy — before responding, rather than racing a candidate's
+ * later login against a background task that Cloudflare doesn't
+ * guarantee will keep running (the earlier waitUntil-based approach hit
+ * exactly that limit and silently dropped the result).
+ *
+ * This is meant to be called well before the candidate ever logs in —
+ * ideally the moment they're identified as ready for an assessment — so
+ * a multi-minute wait here is completely fine; nobody is staring at a
+ * spinner for it.
+ */
+async function handleGrantAccess(request, env) {
+  const { candidateName, candidateEmail, role } = await request.json();
+  if (!candidateName || !candidateEmail || !role) {
+    return json({ error: "candidateName, candidateEmail, and role are required" }, 400);
+  }
+
+  let folderUrl = null;
+  let folderWarning = null;
+
+  if (role === "Client Manager Team Lead") {
+    try {
+      folderUrl = await duplicateAssessmentFolder(env, candidateName, candidateEmail);
+    } catch (err) {
+      folderWarning = err.message;
+      await notifyFolderDuplicationFailure(env, candidateName, candidateEmail, err.message);
+      // Don't block granting access on this failing — the row still
+      // gets created, just without a folder yet. Someone can create it
+      // manually, or this endpoint can be called again to retry.
+    }
+  }
+
+  const page = await notionFetch(env, "pages", {
+    method: "POST",
+    body: JSON.stringify({
+      parent: { database_id: env.ASSESSMENT_ACCESS_DB_ID },
+      properties: {
+        "Candidate Name": { title: [{ text: { content: candidateName } }] },
+        "Email": { email: candidateEmail },
+        "Role": { select: { name: role } },
+        "Status": { select: { name: "Assigned" } },
+        "Recruiting_ROW Link": folderUrl ? { url: folderUrl } : undefined
+      }
+    })
+  });
+
+  return json({ accessPageUrl: page.url, folderUrl, folderWarning });
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
@@ -488,6 +526,9 @@ export default {
       }
       if (request.method === "POST" && url.pathname === "/check-folder-status") {
         return await handleCheckFolderStatus(request, env);
+      }
+      if (request.method === "POST" && url.pathname === "/grant-access") {
+        return await handleGrantAccess(request, env);
       }
       if (request.method === "POST" && url.pathname === "/submit-assessment") {
         return await handleSubmitAssessment(request, env);
