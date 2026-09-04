@@ -54,7 +54,7 @@ async function notionFetch(env, path, options = {}) {
  * allowed in, and if so, their name + assigned role — nothing about
  * any other candidate.
  */
-async function handleCheckAccess(request, env) {
+async function handleCheckAccess(request, env, ctx) {
   const { email } = await request.json();
   if (!email) return json({ error: "email is required" }, 400);
 
@@ -74,11 +74,29 @@ async function handleCheckAccess(request, env) {
 
   const page = result.results[0];
   const props = page.properties;
+  const role = props["Role"]?.select?.name || "";
+  const name = props["Candidate Name"]?.title?.[0]?.plain_text || "";
+  const existingFolderLink = props["Recruiting_ROW Link"]?.url || null;
+
+  // Kick off folder duplication as early as possible — right when the
+  // candidate first logs in, not when they click Start. The folder's
+  // contents don't reveal any task instructions (those live in the app),
+  // so there's no early-access concern, and this gives duplication the
+  // maximum possible head start — likely finished before the candidate
+  // even reaches the task screen. Guarded so repeat logins don't
+  // re-trigger it once a folder already exists.
+  if (role === "Client Manager Team Lead" && !existingFolderLink && name) {
+    ctx.waitUntil(
+      duplicateAssessmentFolder(env, name, email)
+        .then(folderUrl => markFolderReady(env, email, folderUrl))
+        .catch(err => notifyFolderDuplicationFailure(env, name, email, err.message))
+    );
+  }
 
   return json({
     allowed: true,
-    name: props["Candidate Name"]?.title?.[0]?.plain_text || "",
-    role: props["Role"]?.select?.name || "",
+    name,
+    role,
     status: props["Status"]?.select?.name || "",
     accessPageId: page.id
   });
@@ -130,20 +148,9 @@ async function handleGetRoleTasks(request, env, ctx) {
     });
   }
 
-  // Folder duplication can genuinely take longer than a request should
-  // ever make a candidate wait (real files inside real subfolders take
-  // real time to copy). Rather than blocking this response on it — which
-  // previously caused real timeouts — kick it off in the background via
-  // waitUntil, and store its result in KV-less fashion via the
-  // Assessment_Access page itself, which the frontend polls separately.
-  if (needsFolderDuplication && candidateName && candidateEmail) {
-    ctx.waitUntil(
-      duplicateAssessmentFolder(env, candidateName, candidateEmail)
-        .then(folderUrl => markFolderReady(env, candidateEmail, folderUrl))
-        .catch(err => notifyFolderDuplicationFailure(env, candidateName, candidateEmail, err.message))
-    );
-  }
-
+  // Folder duplication (if this role needs it) was already kicked off at
+  // login time in handleCheckAccess, giving it the maximum possible head
+  // start. This just tells the frontend whether to poll for it.
   return json({ tasks, folderDuplicationInProgress: needsFolderDuplication });
 }
 
@@ -474,7 +481,7 @@ export default {
 
     try {
       if (request.method === "POST" && url.pathname === "/check-access") {
-        return await handleCheckAccess(request, env);
+        return await handleCheckAccess(request, env, ctx);
       }
       if (request.method === "POST" && url.pathname === "/get-role-tasks") {
         return await handleGetRoleTasks(request, env, ctx);

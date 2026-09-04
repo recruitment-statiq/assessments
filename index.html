@@ -147,6 +147,14 @@ async function afterLogin() {
     state.role = access.role;
     state.phase = "preface";
     render();
+
+    // Folder duplication (if this role needs it) started at login on the
+    // Worker side — begin polling now, so it's likely already done by
+    // the time the candidate finishes reading the preface and clicks
+    // Start.
+    if (access.role === "Client Manager Team Lead") {
+      pollForFolderReady();
+    }
   } catch (err) {
     state.phase = "error";
     state.errorMessage = "We couldn't verify your access right now. Please try refreshing, or reach out to the People Team if this keeps happening.";
@@ -205,6 +213,10 @@ async function handleStart() {
  * the page.
  */
 function pollForFolderReady() {
+  if (state._pollingStarted) return; // already polling since login, don't start a second interval
+  state._pollingStarted = true;
+  if (state.workingFolderUrl) return; // already found it
+
   const maxAttempts = 30; // ~2 minutes at 4s intervals
   let attempts = 0;
 
