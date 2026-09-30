@@ -400,6 +400,45 @@ function markdownInlineToRichText(line) {
 }
 
 /**
+ * POST /share-folder
+ * body: { email }
+ * Called by the app when the candidate clicks Start. Looks up THEIR row in
+ * Assessment_Access (the folder is never taken from the browser), then asks
+ * Apps Script to give them edit access. Sharing is quick, so we wait for it.
+ */
+async function handleShareFolder(request, env) {
+  const { email } = await request.json();
+  if (!email) return json({ error: "email is required" }, 400);
+
+  const result = await notionFetch(env, `databases/${env.ASSESSMENT_ACCESS_DB_ID}/query`, {
+    method: "POST",
+    body: JSON.stringify({ filter: { property: "Email", email: { equals: email } } })
+  });
+  if (!result.results || result.results.length === 0) {
+    return json({ shared: false, reason: "No access row for this email" }, 404);
+  }
+
+  const props = result.results[0].properties;
+  const folderUrl = props["Working Folder Link"]?.url || null;
+  const name = props["Candidate Name"]?.title?.[0]?.plain_text || "";
+  if (!folderUrl) return json({ shared: false, reason: "Folder not ready yet" });
+
+  const idMatch = folderUrl.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (!idMatch) return json({ shared: false, reason: "Could not read folder ID from link" }, 500);
+
+  const res = await fetch(env.APPS_SCRIPT_FOLDER_DUPLICATION_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "share", folderId: idMatch[1], candidateName: name, candidateEmail: email })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!data.shared) {
+    return json({ shared: false, reason: data.error || `Apps Script returned ${res.status}` }, 502);
+  }
+  return json({ shared: true, folderUrl });
+}
+
+/**
  * POST /notion-webhook
  *
  * Called by a Notion database automation on Assessment_Access
@@ -472,6 +511,9 @@ export default {
       }
       if (request.method === "POST" && url.pathname === "/check-folder-status") {
         return await handleCheckFolderStatus(request, env);
+      }
+      if (request.method === "POST" && url.pathname === "/share-folder") {
+        return await handleShareFolder(request, env);
       }
       if (request.method === "POST" && url.pathname === "/notion-webhook") {
         return await handleNotionWebhook(request, env, ctx);

@@ -17,41 +17,61 @@ const TEMPLATE_FOLDER_ID = "1Ik08939Ce5WwHUZKExN-sRpbdlFqqGpw"; // master templa
 const PARENT_FOLDER_ID = "1hccXWVIBWjnLjDF7YcaLn2-08hOcbAaW";   // where duplicates are created
 
 /**
- * Expects JSON body: { candidateName, candidateEmail, accessPageId }
- * accessPageId = the candidate's Assessment_Access row, so the link is
- * written to that exact row (not looked up by email).
+ * Two actions, both sent by the Worker:
+ *
+ *  (default) duplicate — when a candidate is added to Assessment_Access.
+ *     Body: { candidateName, candidateEmail, accessPageId }
+ *     Copies the template and writes the link onto that row.
+ *     Does NOT share it: the candidate must not get access yet.
+ *
+ *  "share" — when the candidate clicks Start in the app.
+ *     Body: { action: "share", folderId, candidateName, candidateEmail }
+ *     Gives the candidate edit access. Takes a second or two.
  */
 function doPost(e) {
   let body = {};
   try {
     body = JSON.parse(e.postData.contents);
-    const candidateName = body.candidateName;
-    const candidateEmail = body.candidateEmail;
-    const accessPageId = body.accessPageId;
-
-    if (!candidateName || !candidateEmail || !accessPageId) {
-      throw new Error("candidateName, candidateEmail and accessPageId are required");
+    if (body.action === "share") {
+      return shareFolder(body);
     }
-
-    const templateFolder = DriveApp.getFolderById(TEMPLATE_FOLDER_ID);
-    const parentFolder = DriveApp.getFolderById(PARENT_FOLDER_ID);
-
-    const timestamp = Utilities.formatDate(new Date(), "GMT-3", "yyyy-MM-dd HH:mm");
-    const newFolder = parentFolder.createFolder(
-      candidateName + " — Client Manager Team Lead Assessment (" + timestamp + ")"
-    );
-    copyFolderContents(templateFolder, newFolder);
-    newFolder.addEditor(candidateEmail);
-
-    const folderUrl = newFolder.getUrl();
-    writeFolderLinkToNotion(accessPageId, folderUrl);
-
-    return jsonResponse({ folderUrl: folderUrl });
-
+    return duplicateFolder(body);
   } catch (err) {
     notifySlack(body.candidateName, body.candidateEmail, err.message);
     return jsonResponse({ error: err.message });
   }
+}
+
+function duplicateFolder(body) {
+  const candidateName = body.candidateName;
+  const candidateEmail = body.candidateEmail;
+  const accessPageId = body.accessPageId;
+
+  if (!candidateName || !candidateEmail || !accessPageId) {
+    throw new Error("candidateName, candidateEmail and accessPageId are required");
+  }
+
+  const templateFolder = DriveApp.getFolderById(TEMPLATE_FOLDER_ID);
+  const parentFolder = DriveApp.getFolderById(PARENT_FOLDER_ID);
+
+  const timestamp = Utilities.formatDate(new Date(), "GMT-3", "yyyy-MM-dd HH:mm");
+  const newFolder = parentFolder.createFolder(
+    candidateName + " — Client Manager Team Lead Assessment (" + timestamp + ")"
+  );
+  copyFolderContents(templateFolder, newFolder);
+  // Intentionally NOT sharing here — access is granted when they click Start.
+
+  const folderUrl = newFolder.getUrl();
+  writeFolderLinkToNotion(accessPageId, folderUrl);
+  return jsonResponse({ folderUrl: folderUrl });
+}
+
+function shareFolder(body) {
+  if (!body.folderId || !body.candidateEmail) {
+    throw new Error("folderId and candidateEmail are required to share");
+  }
+  DriveApp.getFolderById(body.folderId).addEditor(body.candidateEmail);
+  return jsonResponse({ shared: true });
 }
 
 /** Recursively copies all files and subfolders from source into target. */

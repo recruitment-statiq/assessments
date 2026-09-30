@@ -199,30 +199,33 @@ async function handleStart() {
     const data = await res.json();
     state.tasks = data.tasks || [];
     state.phase = "assessment";
-
-    if (data.folderDuplicationInProgress && !state.workingFolderUrl) {
-      pollForFolderReady();
-    }
   } catch (err) {
     state.phase = "error";
     state.errorMessage = "We couldn't load your tasks right now. Please try again in a moment.";
   }
   render();
+
+  // The folder is only shared now that the assessment has started —
+  // never before. If it's somehow not finished copying yet, keep waiting.
+  if (state.phase === "assessment" && state.role === "Client Manager Team Lead") {
+    if (state.workingFolderUrl) {
+      ensureFolderShared();
+    } else {
+      pollForFolderReady();
+    }
+  }
 }
 
 /**
- * Polls the Worker every 4 seconds for up to ~2 minutes to see if the
- * candidate's working folder is ready yet. Updates the folder-box(es)
- * directly in the DOM rather than a full re-render, so it doesn't
- * disrupt anything the candidate might already be typing elsewhere on
- * the page.
+ * Waits for the working folder to finish copying (normally it's done long
+ * before the candidate logs in, so this rarely runs). Checks every 4s for
+ * up to ~6 minutes, Apps Script's maximum run time.
  */
 function pollForFolderReady() {
-  if (state._pollingStarted) return; // already polling since login, don't start a second interval
-  state._pollingStarted = true;
-  if (state.workingFolderUrl) return; // already found it
+  if (state._pollingActive || state.workingFolderUrl) return;
+  state._pollingActive = true;
 
-  const maxAttempts = 30; // ~2 minutes at 4s intervals
+  const maxAttempts = 90;
   let attempts = 0;
 
   const interval = setInterval(async () => {
@@ -234,26 +237,55 @@ function pollForFolderReady() {
         body: JSON.stringify({ email: state.candidateEmail })
       });
       const data = await res.json();
-
       if (data.ready && data.folderUrl) {
-        state.workingFolderUrl = data.folderUrl;
         clearInterval(interval);
-        document.querySelectorAll("[data-folder-slot]").forEach(el => {
-          el.innerHTML = `📁 Your personal working folder: <a href="${data.folderUrl}" target="_blank" rel="noopener">${data.folderUrl}</a>`;
-        });
+        state._pollingActive = false;
+        state.workingFolderUrl = data.folderUrl;
+        if (state.phase === "assessment") ensureFolderShared();
+        return;
       }
     } catch (err) {
-      // A single failed poll isn't worth alarming the candidate over —
-      // just try again next interval.
+      // One failed check isn't worth alarming the candidate — try again.
     }
 
     if (attempts >= maxAttempts) {
       clearInterval(interval);
-      document.querySelectorAll("[data-folder-slot]").forEach(el => {
-        el.innerHTML = `📁 This is taking longer than expected — please reach out to the People Team and we'll get your folder set up.`;
-      });
+      state._pollingActive = false;
+      setFolderSlots(`📁 This is taking longer than expected — please reach out to the People Team and we'll get your folder set up.`);
     }
   }, 4000);
+}
+
+/**
+ * Gives the candidate edit access to their folder (only called after
+ * they've clicked Start), then shows the link.
+ */
+async function ensureFolderShared() {
+  if (state._sharing || state.folderShared) return;
+  state._sharing = true;
+  try {
+    const res = await fetch(`${WORKER_BASE_URL}/share-folder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: state.candidateEmail })
+    });
+    const data = await res.json();
+    if (data.shared) {
+      state.folderShared = true;
+      state.workingFolderUrl = data.folderUrl || state.workingFolderUrl;
+      setFolderSlots(`📁 Your personal working folder: <a href="${state.workingFolderUrl}" target="_blank" rel="noopener">${state.workingFolderUrl}</a>`);
+    } else {
+      setFolderSlots(`📁 We couldn't open your folder automatically — please reach out to the People Team and we'll sort it out right away.`);
+    }
+  } catch (err) {
+    setFolderSlots(`📁 We couldn't open your folder automatically — please reach out to the People Team and we'll sort it out right away.`);
+  } finally {
+    state._sharing = false;
+  }
+}
+
+function setFolderSlots(html) {
+  document.querySelectorAll("[data-folder-slot]").forEach(el => { el.innerHTML = html; });
 }
 
 async function handleSubmit() {
@@ -367,9 +399,9 @@ function viewAssessment() {
       `;
     }
     if (t.type === "Folder Duplication") {
-      const folderBox = state.workingFolderUrl
+      const folderBox = state.folderShared
         ? `<div class="folder-box" data-folder-slot>📁 Your personal working folder: <a href="${state.workingFolderUrl}" target="_blank" rel="noopener">${state.workingFolderUrl}</a></div>`
-        : `<div class="folder-box" data-folder-slot>📁 Setting up your working folder — this usually takes under a minute. This message will update automatically once it's ready.</div>`;
+        : `<div class="folder-box" data-folder-slot>📁 Opening your working folder — this only takes a few seconds and will update automatically.</div>`;
       return `
         <div class="task">
           <div class="task-head">
