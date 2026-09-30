@@ -81,7 +81,7 @@ async function handleCheckAccess(request, env) {
     role: props["Role"]?.select?.name || "",
     status: props["Status"]?.select?.name || "",
     accessPageId: page.id,
-    workingFolderUrl: props["Recruiting_ROW Link"]?.url || null
+    workingFolderUrl: props["Working Folder Link"]?.url || null
   });
 }
 
@@ -138,61 +138,6 @@ async function handleGetRoleTasks(request, env, ctx) {
 }
 
 /**
- * Calls the Apps Script Web App (running as recruitment@statiq.club) to
- * duplicate the Client Manager Team Lead template folder for this
- * candidate and share it with them. Returns the new folder's URL.
- */
-async function duplicateAssessmentFolder(env, candidateName, candidateEmail) {
-  const res = await fetch(env.APPS_SCRIPT_FOLDER_DUPLICATION_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ candidateName, candidateEmail })
-  });
-
-  if (!res.ok) {
-    throw new Error(`Apps Script returned ${res.status}`);
-  }
-
-  const data = await res.json();
-  if (data.error) {
-    throw new Error(data.error);
-  }
-  if (!data.folderUrl) {
-    throw new Error("Apps Script did not return a folder URL");
-  }
-
-  return data.folderUrl;
-}
-
-/**
- * Writes the finished folder link onto the candidate's Assessment_Access
- * page (found by email) so the frontend can poll for it. This reuses a
- * database that already exists per-candidate rather than requiring a
- * separate KV namespace just for this transient status.
- */
-async function markFolderReady(env, candidateEmail, folderUrl) {
-  const result = await notionFetch(env, `databases/${env.ASSESSMENT_ACCESS_DB_ID}/query`, {
-    method: "POST",
-    body: JSON.stringify({
-      filter: { property: "Email", email: { equals: candidateEmail } }
-    })
-  });
-  if (!result.results || result.results.length === 0) return;
-
-  await notionFetch(env, `pages/${result.results[0].id}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      properties: {
-        // Reusing Recruiting_ROW Link as transient storage for the working
-        // folder URL — Assessment_Access doesn't have a dedicated field for
-        // this, and this one is otherwise unused at this stage of the flow.
-        "Recruiting_ROW Link": { url: folderUrl }
-      }
-    })
-  });
-}
-
-/**
  * POST /check-folder-status
  * body: { email }
  * The frontend polls this every few seconds after Start, until it
@@ -213,7 +158,7 @@ async function handleCheckFolderStatus(request, env) {
     return json({ ready: false });
   }
 
-  const folderUrl = result.results[0].properties["Recruiting_ROW Link"]?.url || null;
+  const folderUrl = result.results[0].properties["Working Folder Link"]?.url || null;
   return json({ ready: !!folderUrl, folderUrl });
 }
 
@@ -455,58 +400,59 @@ function markdownInlineToRichText(line) {
 }
 
 /**
- * POST /grant-access
- * body: { candidateName, candidateEmail, role, assignedBy }
+ * POST /notion-webhook
  *
- * Creates the Assessment_Access row for a candidate. If the role needs a
- * working folder (currently just Client Manager Team Lead), this waits
- * for the ENTIRE duplication to finish — including files that take real
- * time to copy — before responding, rather than racing a candidate's
- * later login against a background task that Cloudflare doesn't
- * guarantee will keep running (the earlier waitUntil-based approach hit
- * exactly that limit and silently dropped the result).
+ * Called by a Notion database automation on Assessment_Access
+ * ("Role is set to Client Manager Team Lead" → Send webhook).
+ * So the flow is: someone adds a candidate in Notion → this fires →
+ * Apps Script duplicates the folder and writes the link onto that row.
+ * Nothing waits for the copy to finish (it takes minutes).
  *
- * This is meant to be called well before the candidate ever logs in —
- * ideally the moment they're identified as ready for an assessment — so
- * a multi-minute wait here is completely fine; nobody is staring at a
- * spinner for it.
+ * Protected by a shared secret header, since Notion webhooks are
+ * otherwise unauthenticated and this URL is public.
  */
-async function handleGrantAccess(request, env) {
-  const { candidateName, candidateEmail, role } = await request.json();
-  if (!candidateName || !candidateEmail || !role) {
-    return json({ error: "candidateName, candidateEmail, and role are required" }, 400);
+async function handleNotionWebhook(request, env, ctx) {
+  if (!env.WEBHOOK_SECRET || request.headers.get("X-Webhook-Secret") !== env.WEBHOOK_SECRET) {
+    return json({ error: "unauthorized" }, 401);
   }
 
-  let folderUrl = null;
-  let folderWarning = null;
+  const payload = await request.json().catch(() => ({}));
+  const pageId = payload?.data?.id || payload?.id;
+  if (!pageId) return json({ error: "No page ID in webhook payload" }, 400);
 
-  if (role === "Client Manager Team Lead") {
-    try {
-      folderUrl = await duplicateAssessmentFolder(env, candidateName, candidateEmail);
-    } catch (err) {
-      folderWarning = err.message;
-      await notifyFolderDuplicationFailure(env, candidateName, candidateEmail, err.message);
-      // Don't block granting access on this failing — the row still
-      // gets created, just without a folder yet. Someone can create it
-      // manually, or this endpoint can be called again to retry.
-    }
+  // Read the row fresh from Notion rather than relying on the payload's shape.
+  const page = await notionFetch(env, `pages/${pageId}`, { method: "GET" });
+  const props = page.properties;
+  const name = props["Candidate Name"]?.title?.[0]?.plain_text || "";
+  const email = props["Email"]?.email || "";
+  const role = props["Role"]?.select?.name || "";
+  const existingFolder = props["Working Folder Link"]?.url || null;
+
+  if (role !== "Client Manager Team Lead") {
+    return json({ skipped: "Role does not need a working folder" });
+  }
+  if (existingFolder) {
+    return json({ skipped: "Row already has a working folder" });
+  }
+  if (!name || !email) {
+    await notifyFolderDuplicationFailure(env, name || "(no name yet)", email || "(no email yet)",
+      "The row's Role was set before Candidate Name and Email were filled in, so no folder was created. " +
+      "Fill in both, then set the Role again to trigger it.");
+    return json({ skipped: "Missing name or email" });
   }
 
-  const page = await notionFetch(env, "pages", {
-    method: "POST",
-    body: JSON.stringify({
-      parent: { database_id: env.ASSESSMENT_ACCESS_DB_ID },
-      properties: {
-        "Candidate Name": { title: [{ text: { content: candidateName } }] },
-        "Email": { email: candidateEmail },
-        "Role": { select: { name: role } },
-        "Status": { select: { name: "Assigned" } },
-        "Recruiting_ROW Link": folderUrl ? { url: folderUrl } : undefined
-      }
+  ctx.waitUntil(
+    fetch(env.APPS_SCRIPT_FOLDER_DUPLICATION_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateName: name, candidateEmail: email, accessPageId: pageId })
+    }).catch(() => {
+      // Expected: the connection may time out while Apps Script keeps working.
+      // Real failures are reported to Slack by Apps Script itself.
     })
-  });
+  );
 
-  return json({ accessPageUrl: page.url, folderUrl, folderWarning });
+  return json({ ok: true, folderRequestedFor: email });
 }
 
 export default {
@@ -527,8 +473,8 @@ export default {
       if (request.method === "POST" && url.pathname === "/check-folder-status") {
         return await handleCheckFolderStatus(request, env);
       }
-      if (request.method === "POST" && url.pathname === "/grant-access") {
-        return await handleGrantAccess(request, env);
+      if (request.method === "POST" && url.pathname === "/notion-webhook") {
+        return await handleNotionWebhook(request, env, ctx);
       }
       if (request.method === "POST" && url.pathname === "/submit-assessment") {
         return await handleSubmitAssessment(request, env);
